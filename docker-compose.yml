@@ -1,0 +1,342 @@
+version: '3.8'
+
+networks:
+  shopnest-network:
+    driver: bridge
+
+volumes:
+  postgres_user_data:
+  postgres_product_data:
+  postgres_order_data:
+  postgres_payment_data:
+  postgres_inventory_data:
+  mongo_notification_data:
+  redis_data:
+
+services:
+
+  # ─────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────
+
+  postgres-user:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: userdb
+      POSTGRES_USER: userservice
+      POSTGRES_PASSWORD: userpass123
+    volumes:
+      - postgres_user_data:/var/lib/postgresql/data
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U userservice -d userdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-product:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: productdb
+      POSTGRES_USER: productservice
+      POSTGRES_PASSWORD: productpass123
+    volumes:
+      - postgres_product_data:/var/lib/postgresql/data
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U productservice -d productdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-order:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: orderdb
+      POSTGRES_USER: orderservice
+      POSTGRES_PASSWORD: orderpass123
+    volumes:
+      - postgres_order_data:/var/lib/postgresql/data
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orderservice -d orderdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-payment:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: paymentdb
+      POSTGRES_USER: paymentservice
+      POSTGRES_PASSWORD: paymentpass123
+    volumes:
+      - postgres_payment_data:/var/lib/postgresql/data
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paymentservice -d paymentdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres-inventory:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: inventorydb
+      POSTGRES_USER: inventoryservice
+      POSTGRES_PASSWORD: inventorypass123
+    volumes:
+      - postgres_inventory_data:/var/lib/postgresql/data
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inventoryservice -d inventorydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo-notification:
+    image: mongo:6-jammy
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: notifservice
+      MONGO_INITDB_ROOT_PASSWORD: notifpass123
+      MONGO_INITDB_DATABASE: notificationdb
+    volumes:
+      - mongo_notification_data:/data/db
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/notificationdb --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass redispass123
+    volumes:
+      - redis_data:/data
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redispass123", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: shopnest
+      RABBITMQ_DEFAULT_PASS: rabbitmqpass123
+    ports:
+      - "15672:15672"   # Management UI
+    networks:
+      - shopnest-network
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ─────────────────────────────────────────
+  # MICROSERVICES
+  # ─────────────────────────────────────────
+
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3001
+      NODE_ENV: production
+      DB_HOST: postgres-user
+      DB_PORT: 5432
+      DB_NAME: userdb
+      DB_USER: userservice
+      DB_PASSWORD: userpass123
+      JWT_SECRET: shopnest-super-secret-jwt-key-2024
+      JWT_EXPIRES_IN: 7d
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redispass123
+      RABBITMQ_URL: amqp://shopnest:rabbitmqpass123@rabbitmq:5672
+    depends_on:
+      postgres-user:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shopnest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  product-service:
+    build:
+      context: ./product-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3002
+      NODE_ENV: production
+      DB_HOST: postgres-product
+      DB_PORT: 5432
+      DB_NAME: productdb
+      DB_USER: productservice
+      DB_PASSWORD: productpass123
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: redispass123
+      RABBITMQ_URL: amqp://shopnest:rabbitmqpass123@rabbitmq:5672
+      JWT_SECRET: shopnest-super-secret-jwt-key-2024
+    depends_on:
+      postgres-product:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shopnest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  inventory-service:
+    build:
+      context: ./inventory-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3003
+      NODE_ENV: production
+      DB_HOST: postgres-inventory
+      DB_PORT: 5432
+      DB_NAME: inventorydb
+      DB_USER: inventoryservice
+      DB_PASSWORD: inventorypass123
+      RABBITMQ_URL: amqp://shopnest:rabbitmqpass123@rabbitmq:5672
+      JWT_SECRET: shopnest-super-secret-jwt-key-2024
+    depends_on:
+      postgres-inventory:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shopnest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3004
+      DATABASE_URL: postgresql://orderservice:orderpass123@postgres-order:5432/orderdb
+      RABBITMQ_URL: amqp://shopnest:rabbitmqpass123@rabbitmq:5672
+      PRODUCT_SERVICE_URL: http://product-service:3002
+      INVENTORY_SERVICE_URL: http://inventory-service:3003
+      USER_SERVICE_URL: http://user-service:3001
+      JWT_SECRET: shopnest-super-secret-jwt-key-2024
+    depends_on:
+      postgres-order:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shopnest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3004/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  payment-service:
+    build:
+      context: ./payment-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3005
+      DATABASE_URL: postgresql://paymentservice:paymentpass123@postgres-payment:5432/paymentdb
+      RABBITMQ_URL: amqp://shopnest:rabbitmqpass123@rabbitmq:5672
+      ORDER_SERVICE_URL: http://order-service:3004
+      JWT_SECRET: shopnest-super-secret-jwt-key-2024
+      STRIPE_SECRET_KEY: sk_test_placeholder_replace_with_real_key
+    depends_on:
+      postgres-payment:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shopnest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  notification-service:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile
+    environment:
+      PORT: 3006
+      NODE_ENV: production
+      MONGO_URI: mongodb://notifservice:notifpass123@mongo-notification:27017/notificationdb?authSource=admin
+      RABBITMQ_URL: amqp://shopnest:rabbitmqpass123@rabbitmq:5672
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 587
+      SMTP_USER: noreply@shopnest.com
+      SMTP_PASS: smtp_password_placeholder
+    depends_on:
+      mongo-notification:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - shopnest-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─────────────────────────────────────────
+  # API GATEWAY
+  # ─────────────────────────────────────────
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - user-service
+      - product-service
+      - inventory-service
+      - order-service
+      - payment-service
+      - notification-service
+    networks:
+      - shopnest-network
+    restart: unless-stopped
