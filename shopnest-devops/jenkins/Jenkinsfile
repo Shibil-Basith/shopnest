@@ -69,14 +69,12 @@ pipeline {
                     servicesToTest.each { service ->
                         echo "Testing ${service}..."
                         dir("${service}") {
-                            // Node.js services
                             if (['user-service', 'product-service', 'inventory-service'].contains(service)) {
                                 sh '''
                                     npm install
                                     npm test || true
                                 '''
                             }
-                            // Python services
                             if (['order-service', 'payment-service', 'notification-service'].contains(service)) {
                                 sh '''
                                     pip install -r requirements.txt || true
@@ -145,6 +143,8 @@ pipeline {
 
                         sh """
                             trivy image \
+                                --config /dev/null \
+                                --cache-dir /var/lib/jenkins/.cache/trivy \
                                 --exit-code 0 \
                                 --severity HIGH,CRITICAL \
                                 --no-progress \
