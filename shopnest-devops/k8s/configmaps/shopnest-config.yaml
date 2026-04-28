@@ -1,0 +1,34 @@
+# configmaps/shopnest-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shopnest-config
+  namespace: shopnest
+data:
+  # RDS PostgreSQL
+  DB_HOST: "shopnest-production-postgres.cx0gysw6sonp.ap-south-1.rds.amazonaws.com"
+  DB_PORT: "5432"
+
+  # ElastiCache Redis
+  REDIS_HOST: "master.shopnest-production-redis.kjco27.aps1.cache.amazonaws.com"
+  REDIS_PORT: "6379"
+  REDIS_TLS: "true"
+
+  # RabbitMQ — runs as pod inside K8s
+  RABBITMQ_HOST: "rabbitmq-service"
+  RABBITMQ_PORT: "5672"
+
+  # MongoDB — runs as pod inside K8s
+  MONGODB_HOST: "mongodb-service"
+  MONGODB_PORT: "27017"
+
+  # Service URLs — internal K8s DNS
+  USER_SERVICE_URL: "http://user-service:3001"
+  PRODUCT_SERVICE_URL: "http://product-service:3002"
+  ORDER_SERVICE_URL: "http://order-service:3003"
+  PAYMENT_SERVICE_URL: "http://payment-service:3004"
+  INVENTORY_SERVICE_URL: "http://inventory-service:3005"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:5000"
+
+  # Environment
+  NODE_ENV: "production"

@@ -1,0 +1,9 @@
+# namespaces/shopnest.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shopnest
+  labels:
+    name: shopnest
+    project: shopnest
+    managed-by: kubectl

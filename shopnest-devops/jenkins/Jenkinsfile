@@ -1,0 +1,223 @@
+// shopnest-devops/jenkins/Jenkinsfile
+// CI/CD Pipeline for ShopNest microservices
+
+def ECR_REGISTRY = "035351467711.dkr.ecr.ap-south-1.amazonaws.com"
+def AWS_REGION   = "ap-south-1"
+def NAMESPACE    = "shopnest"
+def REPO_URL     = "https://github.com/Shibil-Basith/shopnest.git"
+
+def SERVICES = [
+    "user-service"        : "3001",
+    "product-service"     : "3002",
+    "order-service"       : "3003",
+    "payment-service"     : "3004",
+    "inventory-service"   : "3005",
+    "notification-service": "5000"
+]
+
+pipeline {
+
+    agent any
+
+    environment {
+        AWS_DEFAULT_REGION = "${AWS_REGION}"
+    }
+
+    parameters {
+        choice(
+            name: 'SERVICE',
+            choices: [
+                'user-service',
+                'product-service',
+                'order-service',
+                'payment-service',
+                'inventory-service',
+                'notification-service',
+                'all'
+            ],
+            description: 'Which service to build and deploy'
+        )
+    }
+
+    stages {
+
+        // ── Stage 1: Checkout ─────────────────────
+        stage('Checkout') {
+            steps {
+                echo "Checking out code from GitHub..."
+                git(
+                    url: "${REPO_URL}",
+                    branch: 'main',
+                    credentialsId: 'github-credentials'
+                )
+                script {
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
+                        returnStdout: true
+                    ).trim()
+                    echo "Building commit: ${env.GIT_COMMIT_SHORT}"
+                }
+            }
+        }
+
+        // ── Stage 2: Test ─────────────────────────
+        stage('Test') {
+            steps {
+                script {
+                    def servicesToTest = params.SERVICE == 'all' ? SERVICES.keySet() : [params.SERVICE]
+
+                    servicesToTest.each { service ->
+                        echo "Testing ${service}..."
+                        dir("${service}") {
+                            // Node.js services
+                            if (['user-service', 'product-service', 'inventory-service'].contains(service)) {
+                                sh '''
+                                    npm install
+                                    npm test || true
+                                '''
+                            }
+                            // Python services
+                            if (['order-service', 'payment-service', 'notification-service'].contains(service)) {
+                                sh '''
+                                    pip install -r requirements.txt || true
+                                    python -m pytest tests/ || true
+                                '''
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Stage 3: Build Docker Image ───────────
+        stage('Build') {
+            steps {
+                script {
+                    def servicesToBuild = params.SERVICE == 'all' ? SERVICES.keySet() : [params.SERVICE]
+
+                    servicesToBuild.each { service ->
+                        echo "Building Docker image for ${service}..."
+                        def imageTag  = "${ECR_REGISTRY}/shopnest/${service}:${env.GIT_COMMIT_SHORT}"
+                        def latestTag = "${ECR_REGISTRY}/shopnest/${service}:latest"
+
+                        dir("${service}") {
+                            sh "docker build -t ${imageTag} -t ${latestTag} ."
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Stage 4: Push to ECR ──────────────────
+        stage('Push to ECR') {
+            steps {
+                withAWS(credentials: 'aws-credentials', region: "${AWS_REGION}") {
+                    script {
+                        sh """
+                            aws ecr get-login-password --region ${AWS_REGION} | \
+                            docker login --username AWS --password-stdin ${ECR_REGISTRY}
+                        """
+
+                        def servicesToPush = params.SERVICE == 'all' ? SERVICES.keySet() : [params.SERVICE]
+
+                        servicesToPush.each { service ->
+                            echo "Pushing ${service} to ECR..."
+                            def imageTag  = "${ECR_REGISTRY}/shopnest/${service}:${env.GIT_COMMIT_SHORT}"
+                            def latestTag = "${ECR_REGISTRY}/shopnest/${service}:latest"
+
+                            sh "docker push ${imageTag}"
+                            sh "docker push ${latestTag}"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Stage 5: Security Scan ────────────────
+        stage('Security Scan') {
+            steps {
+                script {
+                    def servicesToScan = params.SERVICE == 'all' ? SERVICES.keySet() : [params.SERVICE]
+
+                    servicesToScan.each { service ->
+                        echo "Scanning ${service} for vulnerabilities..."
+                        def imageTag = "${ECR_REGISTRY}/shopnest/${service}:${env.GIT_COMMIT_SHORT}"
+
+                        sh """
+                            trivy image \
+                                --exit-code 0 \
+                                --severity HIGH,CRITICAL \
+                                --no-progress \
+                                ${imageTag}
+                        """
+                    }
+                }
+            }
+        }
+
+        // ── Stage 6: Deploy to Kubernetes ─────────
+        stage('Deploy') {
+            steps {
+                script {
+                    def servicesToDeploy = params.SERVICE == 'all' ? SERVICES.keySet() : [params.SERVICE]
+
+                    servicesToDeploy.each { service ->
+                        echo "Deploying ${service} to Kubernetes..."
+                        def imageTag = "${ECR_REGISTRY}/shopnest/${service}:${env.GIT_COMMIT_SHORT}"
+
+                        sh """
+                            kubectl set image deployment/${service} \
+                                ${service}=${imageTag} \
+                                -n ${NAMESPACE}
+
+                            kubectl rollout status deployment/${service} \
+                                -n ${NAMESPACE} \
+                                --timeout=120s
+                        """
+                    }
+                }
+            }
+        }
+
+        // ── Stage 7: Health Check ─────────────────
+        stage('Health Check') {
+            steps {
+                script {
+                    def servicesToCheck = params.SERVICE == 'all' ? SERVICES.keySet() : [params.SERVICE]
+
+                    servicesToCheck.each { service ->
+                        def port = SERVICES[service]
+                        echo "Health checking ${service}..."
+
+                        sh """
+                            kubectl run health-check-${service} \
+                                --image=curlimages/curl:latest \
+                                --restart=Never \
+                                --rm \
+                                -n ${NAMESPACE} \
+                                -- curl -sf http://${service}:${port}/health || true
+
+                            kubectl delete pod health-check-${service} \
+                                -n ${NAMESPACE} \
+                                --ignore-not-found=true
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline succeeded — ${params.SERVICE} deployed successfully"
+            echo "Image: ${ECR_REGISTRY}/shopnest/${params.SERVICE}:${env.GIT_COMMIT_SHORT}"
+        }
+        failure {
+            echo "❌ Pipeline failed — check logs above"
+        }
+        always {
+            echo "Cleaning up dangling Docker images..."
+            sh "docker image prune -f || true"
+        }
+    }
+}

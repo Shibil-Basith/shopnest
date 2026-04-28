@@ -1,0 +1,92 @@
+# deployments/payment-service.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: shopnest
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+        - name: payment-service
+          image: python:3.11-slim
+          workingDir: /app
+          command: ["python", "src/app.py"]
+          ports:
+            - containerPort: 3004
+          env:
+            - name: PORT
+              value: "3004"
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: shopnest-config
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: shopnest-config
+                  key: DB_PORT
+            - name: DB_NAME
+              value: "paymentdb"
+            - name: DB_USERNAME
+              value: "paymentservice"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shopnest-secrets
+                  key: PAYMENT_DB_PASSWORD
+            - name: RABBITMQ_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: shopnest-config
+                  key: RABBITMQ_HOST
+            - name: RABBITMQ_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: shopnest-config
+                  key: RABBITMQ_PORT
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: shopnest-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3004
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3004
+            initialDelaySeconds: 15
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: shopnest
+spec:
+  selector:
+    app: payment-service
+  ports:
+    - port: 3004
+      targetPort: 3004
+  type: ClusterIP
